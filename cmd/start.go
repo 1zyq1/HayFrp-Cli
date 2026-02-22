@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,7 +62,7 @@ var startCmd = &cobra.Command{
 		}
 
 		// 如果自动登录失败，手动登录
-		if csrf == "" {
+		for csrf == "" {
 			fmt.Print("用户名/邮箱: ")
 			username, _ := reader.ReadString('\n')
 			username = strings.TrimSpace(username)
@@ -71,12 +74,12 @@ var startCmd = &cobra.Command{
 			loginResp, err := userClient.Login(username, password)
 			if err != nil {
 				fmt.Printf("✗ 登录失败: %v\n", err)
-				return
+				continue
 			}
 
 			if loginResp.Status != 200 {
 				fmt.Printf("✗ 登录失败: %s\n", loginResp.Message)
-				return
+				continue
 			}
 
 			csrf = loginResp.Token
@@ -111,165 +114,197 @@ var startCmd = &cobra.Command{
 		fmt.Printf("拥有隧道: %v / 已使用: %v\n", infoResp.Proxies, infoResp.Useproxies)
 		fmt.Printf("================================\n\n")
 
-		// 步骤3: 获取隧道列表
+		// 隧道选择循环
 		proxyClient := api.NewProxyAPIClient()
-		listResp, err := proxyClient.ListTunnel(csrf, "")
-		if err != nil {
-			fmt.Printf("✗ 获取隧道列表失败: %v\n", err)
-			return
-		}
-
-		if listResp.Status != 200 || len(listResp.Proxies) == 0 {
-			fmt.Println("✗ 暂无可用隧道，请先在控制台创建隧道")
-			return
-		}
-
-		fmt.Println("========== 可用隧道列表 ==========")
-		for i, p := range listResp.Proxies {
-			status := "禁用"
-			if p.Status == "true" {
-				status = "启用"
-			}
-			fmt.Printf("%d. [%s] %s (%s)\n", i+1, p.ProxyType, p.ProxyName, status)
-			fmt.Printf("   节点: %s\n", p.NodeName)
-			fmt.Printf("   本地: %s:%s -> 远程: %s\n", p.LocalIP, p.LocalPort, p.RemotePort)
-			if p.Domain != "" {
-				fmt.Printf("   域名: %s\n", p.Domain)
-			}
-		}
-		fmt.Println("================================")
-
-		// 步骤4: 选择隧道
-		fmt.Print("\n请选择要启动的隧道编号: ")
-		choice, _ := reader.ReadString('\n')
-		choice = strings.TrimSpace(choice)
-
-		var choiceIndex int
-		_, err = fmt.Sscanf(choice, "%d", &choiceIndex)
-		if err != nil || choiceIndex < 1 || choiceIndex > len(listResp.Proxies) {
-			fmt.Println("✗ 无效的选择")
-			return
-		}
-
-		selectedProxy := listResp.Proxies[choiceIndex-1]
-
-		// 检查隧道状态
-		if selectedProxy.Status != "true" {
-			fmt.Printf("隧道 %s 当前状态为禁用，正在启用...\n", selectedProxy.ProxyName)
-			toggleResp, err := proxyClient.ToggleTunnel(csrf, selectedProxy.ID, "true")
+		for {
+			// 步骤3: 获取隧道列表
+			listResp, err := proxyClient.ListTunnel(csrf, "")
 			if err != nil {
-				fmt.Printf("✗ 启用隧道失败: %v\n", err)
-				return
+				fmt.Printf("✗ 获取隧道列表失败: %v\n", err)
+				fmt.Print("\n按任意键重试...")
+				reader.ReadString('\n')
+				continue
 			}
-			if toggleResp.Status != 200 {
-				fmt.Printf("✗ 启用隧道失败: %s\n", toggleResp.Message)
-				return
+
+			if listResp.Status != 200 || len(listResp.Proxies) == 0 {
+				fmt.Println("✗ 暂无可用隧道，请先在控制台创建隧道")
+				fmt.Print("\n按任意键重试...")
+				reader.ReadString('\n')
+				continue
 			}
-			fmt.Printf("✓ 隧道已启用\n")
-		}
 
-		// 步骤5: 生成配置文件
-		fmt.Printf("\n正在为隧道 %s 生成配置文件...\n", selectedProxy.ProxyName)
-		config, err := proxyClient.GetTunnelConfig("toml", csrf, "", selectedProxy.ID)
-		if err != nil {
-			fmt.Printf("✗ 生成配置文件失败: %v\n", err)
-			return
-		}
-
-		// 保存配置文件到用户目录
-		if homeDir == "" {
-			homeDir = "."
-		}
-
-		configDir = filepath.Join(homeDir, ".hayfrp")
-		if err := os.MkdirAll(configDir, 0755); err != nil {
-			configDir = "."
-		}
-
-		configFile := filepath.Join(configDir, "frpc.toml")
-		if err := os.WriteFile(configFile, []byte(config), 0644); err != nil {
-			fmt.Printf("✗ 保存配置文件失败: %v\n", err)
-			return
-		}
-
-		fmt.Printf("✓ 配置文件已保存: %s\n", configFile)
-
-		// 步骤6: 启动frpc
-		fmt.Printf("\n========== 启动frpc ==========\n")
-
-		// 检查frpc可执行文件
-		frpcPath := ""
-		possiblePaths := []string{
-			"./frpc",
-			"/usr/local/bin/frpc",
-			"/usr/bin/frpc",
-			filepath.Join(homeDir, ".hayfrp", "frpc"),
-		}
-
-		for _, path := range possiblePaths {
-			if _, err := os.Stat(path); err == nil {
-				frpcPath = path
-				break
+			fmt.Println("========== 可用隧道列表 ==========")
+			for i, p := range listResp.Proxies {
+				status := "禁用"
+				if p.Status == "true" {
+					status = "启用"
+				}
+				fmt.Printf("%d. [%s] %s (%s)\n", i+1, p.ProxyType, p.ProxyName, status)
+				fmt.Printf("   节点: %s\n", p.NodeName)
+				fmt.Printf("   本地: %s:%s -> 远程: %s\n", p.LocalIP, p.LocalPort, p.RemotePort)
+				if p.Domain != "" {
+					fmt.Printf("   域名: %s\n", p.Domain)
+				}
 			}
-		}
+			fmt.Println("================================")
 
-		if frpcPath == "" {
-			fmt.Println("未找到 frpc 可执行文件，正在尝试自动下载...")
+			// 步骤4: 选择隧道
+			fmt.Print("\n请选择要启动的隧道编号: ")
+			choice, _ := reader.ReadString('\n')
+			choice = strings.TrimSpace(choice)
 
-			// 自动下载 frpc
-			downloadResp, err := downloadFrpc(homeDir, configDir)
+			var choiceIndex int
+			_, err = fmt.Sscanf(choice, "%d", &choiceIndex)
+			if err != nil || choiceIndex < 1 || choiceIndex > len(listResp.Proxies) {
+				fmt.Println("✗ 无效的选择")
+				fmt.Print("\n按任意键重试...")
+				reader.ReadString('\n')
+				continue
+			}
+
+			selectedProxy := listResp.Proxies[choiceIndex-1]
+
+			// 检查隧道状态
+			if selectedProxy.Status != "true" {
+				fmt.Printf("隧道 %s 当前状态为禁用，正在启用...\n", selectedProxy.ProxyName)
+				toggleResp, err := proxyClient.ToggleTunnel(csrf, selectedProxy.ID, "true")
+				if err != nil {
+					fmt.Printf("✗ 启用隧道失败: %v\n", err)
+					fmt.Print("\n按任意键重试...")
+					reader.ReadString('\n')
+					continue
+				}
+				if toggleResp.Status != 200 {
+					fmt.Printf("✗ 启用隧道失败: %s\n", toggleResp.Message)
+					fmt.Print("\n按任意键重试...")
+					reader.ReadString('\n')
+					continue
+				}
+				fmt.Printf("✓ 隧道已启用\n")
+			}
+
+			// 步骤5: 生成配置文件
+			fmt.Printf("\n正在为隧道 %s 生成配置文件...\n", selectedProxy.ProxyName)
+			config, err := proxyClient.GetTunnelConfig("toml", csrf, "", selectedProxy.ID)
 			if err != nil {
-				fmt.Printf("✗ 自动下载 frpc 失败: %v\n", err)
-				fmt.Println("\n请手动下载 frpc:")
+				fmt.Printf("✗ 生成配置文件失败: %v\n", err)
+				fmt.Print("\n按任意键重试...")
+				reader.ReadString('\n')
+				continue
+			}
 
-				// 获取下载列表
-				nodeClient := api.NewNodeAPIClient()
-				downloadList, err := nodeClient.GetDownloadList()
-				if err == nil && downloadList.Status == 200 {
-					fmt.Println("\n下载源:")
-					for _, source := range downloadList.Sources {
-						fmt.Printf("  - %s: %s\n", source.Name, source.URL)
-					}
+			// 保存配置文件到用户目录
+			if homeDir == "" {
+				homeDir = "."
+			}
 
-					fmt.Println("\n推荐下载:")
-					osName := runtime.GOOS
-					arch := runtime.GOARCH
+			configDir = filepath.Join(homeDir, ".hayfrp")
+			if err := os.MkdirAll(configDir, 0755); err != nil {
+				configDir = "."
+			}
 
-					fmt.Printf("  系统: %s, 架构: %s\n", osName, arch)
-					for _, item := range downloadList.Lists.Frpc {
-						if strings.ToLower(item.Platform) == strings.ToLower(osName) &&
-							strings.Contains(strings.ToLower(item.Arch), strings.ToLower(arch)) {
-							fmt.Printf("  - %s (版本: %s)\n", item.Name, item.Version)
-							for _, source := range downloadList.Sources {
-								fmt.Printf("    下载: %s%s\n", source.URL, item.URL)
+			configFile := filepath.Join(configDir, "frpc.toml")
+			if err := os.WriteFile(configFile, []byte(config), 0644); err != nil {
+				fmt.Printf("✗ 保存配置文件失败: %v\n", err)
+				fmt.Print("\n按任意键重试...")
+				reader.ReadString('\n')
+				continue
+			}
+
+			fmt.Printf("✓ 配置文件已保存: %s\n", configFile)
+
+			// 步骤6: 启动frpc
+			fmt.Printf("\n========== 启动frpc ==========\n")
+
+			// 检查frpc可执行文件
+			frpcPath := ""
+			frpcName := "frpc"
+			if runtime.GOOS == "windows" {
+				frpcName = "frpc.exe"
+			}
+
+			possiblePaths := []string{
+				filepath.Join(".", frpcName),
+				filepath.Join(homeDir, ".hayfrp", frpcName),
+			}
+
+			// Unix 系统额外路径
+			if runtime.GOOS != "windows" {
+				possiblePaths = append(possiblePaths,
+					"/usr/local/bin/frpc",
+					"/usr/bin/frpc",
+				)
+			}
+
+			for _, path := range possiblePaths {
+				if _, err := os.Stat(path); err == nil {
+					frpcPath = path
+					break
+				}
+			}
+
+			if frpcPath == "" {
+				fmt.Println("未找到 frpc 可执行文件，正在尝试自动下载...")
+
+				// 自动下载 frpc
+				downloadResp, err := downloadFrpc(homeDir, configDir)
+				if err != nil {
+					fmt.Printf("✗ 自动下载 frpc 失败: %v\n", err)
+					fmt.Println("\n请手动下载 frpc:")
+
+					// 获取下载列表
+					nodeClient := api.NewNodeAPIClient()
+					downloadList, err := nodeClient.GetDownloadList()
+					if err == nil && downloadList.Status == 200 {
+						fmt.Println("\n下载源:")
+						for _, source := range downloadList.Sources {
+							fmt.Printf("  - %s: %s\n", source.Name, source.URL)
+						}
+
+						fmt.Println("\n推荐下载:")
+						osName := runtime.GOOS
+						arch := runtime.GOARCH
+
+						fmt.Printf("  系统: %s, 架构: %s\n", osName, arch)
+						for _, item := range downloadList.Lists.Frpc {
+							if strings.ToLower(item.Platform) == strings.ToLower(osName) &&
+								strings.Contains(strings.ToLower(item.Arch), strings.ToLower(arch)) {
+								fmt.Printf("  - %s (版本: %s)\n", item.Name, item.Version)
+								for _, source := range downloadList.Sources {
+									fmt.Printf("    下载: %s%s\n", source.URL, item.URL)
+								}
 							}
 						}
 					}
+
+					fmt.Printf("\n下载后请将 frpc 放到以下任一路径:\n")
+					for _, path := range possiblePaths {
+						fmt.Printf("  - %s\n", path)
+					}
+					fmt.Print("\n按任意键重试...")
+					reader.ReadString('\n')
+					continue
 				}
 
-				fmt.Printf("\n下载后请将 frpc 放到以下任一路径:\n")
-				for _, path := range possiblePaths {
-					fmt.Printf("  - %s\n", path)
-				}
-				return
+				frpcPath = downloadResp
+				fmt.Printf("✓ frpc 下载成功: %s\n", frpcPath)
 			}
 
-			frpcPath = downloadResp
-			fmt.Printf("✓ frpc 下载成功: %s\n", frpcPath)
-		}
+			fmt.Printf("使用 frpc: %s\n", frpcPath)
+			fmt.Printf("配置文件: %s\n", configFile)
+			fmt.Println("\n按 Ctrl+C 可停止隧道")
+			fmt.Println("================================\n")
 
-		fmt.Printf("使用 frpc: %s\n", frpcPath)
-		fmt.Printf("配置文件: %s\n", configFile)
-		fmt.Println("\n按 Ctrl+C 可停止隧道")
-		fmt.Println("================================\n")
+			// 启动frpc
+			frpcExec := exec.Command(frpcPath, "-c", configFile)
+			frpcExec.Stdout = os.Stdout
+			frpcExec.Stderr = os.Stderr
 
-		// 启动frpc
-		frpcExec := exec.Command(frpcPath, "-c", configFile)
-		frpcExec.Stdout = os.Stdout
-		frpcExec.Stderr = os.Stderr
-
-		if err := frpcExec.Run(); err != nil {
-			fmt.Printf("\n✗ frpc 启动失败: %v\n", err)
+			if err := frpcExec.Run(); err != nil {
+				fmt.Printf("\n✗ frpc 启动失败: %v\n", err)
+				fmt.Print("\n按任意键返回隧道列表...")
+				reader.ReadString('\n')
+			}
 		}
 	},
 }
@@ -315,7 +350,8 @@ func downloadFrpc(homeDir, configDir string) (string, error) {
 	}
 	source := downloadList.Sources[0]
 
-	downloadURL := source.URL + matchedItem.URL
+	// 清理 URL 中的换行符
+	downloadURL := strings.TrimSpace(source.URL) + strings.TrimSpace(matchedItem.URL)
 	fmt.Printf("版本: %s\n", matchedItem.Version)
 	fmt.Printf("下载地址: %s\n", downloadURL)
 
@@ -365,25 +401,46 @@ func downloadFrpc(homeDir, configDir string) (string, error) {
 	file.Close()
 
 	// 处理压缩包
-	if strings.HasSuffix(matchedItem.URL, ".tar.gz") || strings.HasSuffix(matchedItem.URL, ".zip") {
-		fmt.Println("正在解压文件...")
-		if strings.HasSuffix(matchedItem.URL, ".tar.gz") {
-			if err := extractTarGz(tempFile, configDir); err != nil {
-				return "", fmt.Errorf("解压失败: %w", err)
-			}
-		} else if strings.HasSuffix(matchedItem.URL, ".zip") {
-			if err := extractZip(tempFile, configDir); err != nil {
-				return "", fmt.Errorf("解压失败: %w", err)
-			}
+	urlClean := strings.TrimSpace(matchedItem.URL)
+	if strings.HasSuffix(urlClean, ".tar.gz") {
+		fmt.Println("正在解压 tar.gz 文件...")
+		if err := extractTarGz(tempFile, configDir); err != nil {
+			os.Remove(tempFile)
+			return "", fmt.Errorf("解压失败: %w", err)
 		}
 		os.Remove(tempFile)
-	} else if strings.HasSuffix(matchedItem.URL, ".exe") || strings.HasSuffix(matchedItem.URL, "frpc") {
-		os.Rename(tempFile, filepath.Join(configDir, "frpc"))
+	} else if strings.HasSuffix(urlClean, ".zip") {
+		fmt.Println("正在解压 zip 文件...")
+		if err := extractZip(tempFile, configDir); err != nil {
+			os.Remove(tempFile)
+			return "", fmt.Errorf("解压失败: %w", err)
+		}
+		os.Remove(tempFile)
+	} else if strings.HasSuffix(urlClean, ".exe") {
+		// Windows 可执行文件
+		target := filepath.Join(configDir, "frpc.exe")
+		os.Rename(tempFile, target)
+	} else {
+		// 直接是可执行文件
+		target := filepath.Join(configDir, "frpc")
+		os.Rename(tempFile, target)
 	}
 
+	// 检查 frpc 是否存在
 	frpcPath := filepath.Join(configDir, "frpc")
-	if err := os.Chmod(frpcPath, 0755); err != nil {
-		return "", fmt.Errorf("设置执行权限失败: %w", err)
+	if _, err := os.Stat(frpcPath); os.IsNotExist(err) {
+		// 尝试 frpc.exe (Windows)
+		frpcPath = filepath.Join(configDir, "frpc.exe")
+		if _, err := os.Stat(frpcPath); os.IsNotExist(err) {
+			return "", fmt.Errorf("解压后未找到 frpc 可执行文件")
+		}
+	}
+
+	// 设置执行权限 (Unix 系统需要)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(frpcPath, 0755); err != nil {
+			return "", fmt.Errorf("设置执行权限失败: %w", err)
+		}
 	}
 
 	return frpcPath, nil
@@ -391,18 +448,88 @@ func downloadFrpc(homeDir, configDir string) (string, error) {
 
 // extractTarGz 解压 tar.gz 文件
 func extractTarGz(src, dest string) error {
-	// 简单实现：查找解压后的 frpc 文件
-	// 实际需要使用 compress/gzip 和 archive/tar
-	// 这里先返回错误提示用户手动解压
-	return fmt.Errorf("请手动解压 tar.gz 文件: %s 到目录: %s", src, dest)
+	file, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gzr, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		// 只提取 frpc 文件
+		name := filepath.Base(header.Name)
+		if name == "frpc" || name == "frpc.exe" {
+			target := filepath.Join(dest, name)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return err
+			}
+			f.Close()
+			fmt.Printf("✓ 已解压: %s\n", target)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("压缩包中未找到 frpc 文件")
 }
 
 // extractZip 解压 zip 文件
 func extractZip(src, dest string) error {
-	// 简单实现：查找解压后的 frpc 文件
-	// 实际需要使用 archive/zip
-	// 这里先返回错误提示用户手动解压
-	return fmt.Errorf("请手动解压 zip 文件: %s 到目录: %s", src, dest)
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		name := filepath.Base(f.Name)
+		if name == "frpc" || name == "frpc.exe" {
+			target := filepath.Join(dest, name)
+
+			rc, err := f.Open()
+			if err != nil {
+				return err
+			}
+
+			file, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, f.Mode())
+			if err != nil {
+				rc.Close()
+				return err
+			}
+
+			if _, err := io.Copy(file, rc); err != nil {
+				file.Close()
+				rc.Close()
+				return err
+			}
+
+			file.Close()
+			rc.Close()
+			fmt.Printf("✓ 已解压: %s\n", target)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("压缩包中未找到 frpc 文件")
 }
 
 // getFileExt 获取文件扩展名

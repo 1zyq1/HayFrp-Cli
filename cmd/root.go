@@ -24,6 +24,11 @@ func Execute() {
 	}
 }
 
+// ExecuteStart 直接执行start命令的逻辑
+func ExecuteStart() {
+	startCmd.Run(startCmd, nil)
+}
+
 func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "配置文件路径 (默认为 ~/.hayfrp.yaml)")
