@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"fmt"
+	"syscall"
 
 	"hayfrp-cli/api"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var userCmd = &cobra.Command{
@@ -15,12 +17,20 @@ var userCmd = &cobra.Command{
 }
 
 var loginCmd = &cobra.Command{
-	Use:   "login [username] [password]",
+	Use:   "login [username]",
 	Short: "用户登录",
-	Args:  cobra.ExactArgs(2),
+	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		user := args[0]
-		passwd := args[1]
+
+		fmt.Print("请输入密码: ")
+		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			fmt.Printf("\n读取密码失败: %v\n", err)
+			return
+		}
+		fmt.Println() // 换行
+		passwd := string(bytePassword)
 
 		client := api.NewUserAPIClient()
 		resp, err := client.Login(user, passwd)

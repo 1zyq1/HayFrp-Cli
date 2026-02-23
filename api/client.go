@@ -21,7 +21,7 @@ var endpointMutex sync.Mutex
 
 // HTTPClient 公共HTTP客户端
 var HTTPClient = &http.Client{
-	Timeout: 15 * time.Second,
+	Timeout: 5 * time.Second,
 }
 
 // SwitchToNextEndpoint 切换到下一个API端点

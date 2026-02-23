@@ -74,9 +74,11 @@ var startCmd = &cobra.Command{
 					username, _ := reader.ReadString('\n')
 					username = strings.TrimSpace(username)
 
-					fmt.Print("密码: ")
-					password, _ := reader.ReadString('\n')
-					password = strings.TrimSpace(password)
+					password, err := readPasswordWithMask("密码")
+					if err != nil {
+						fmt.Printf("读取密码失败: %v\n", err)
+						continue
+					}
 
 					loginResp, err := userClient.Login(username, password)
 					if err != nil {
