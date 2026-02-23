@@ -30,3 +30,8 @@ Thumbs.db
 
 # Config
 .hayfrp.yaml
+# build
+releases/
+
+# gitignore
+.gitignore

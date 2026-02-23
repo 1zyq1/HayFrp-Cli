@@ -12,9 +12,8 @@ var cfgFile string
 
 var rootCmd = &cobra.Command{
 	Use:   "hayfrp",
-	Short: "HayFrp CLI 启动器",
-	Long: `HayFrp CLI 是一个命令行工具，用于管理 HayFrp 内网穿透服务。
-支持用户登录、隧道管理、节点查询等功能。`,
+	Short: "HayFrp 隧道启动器",
+	Long:  `HayFrp 隧道启动器 - 交互式启动隧道`,
 }
 
 func Execute() {

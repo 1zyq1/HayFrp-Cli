@@ -38,273 +38,311 @@ var startCmd = &cobra.Command{
 		configDir := filepath.Join(homeDir, ".hayfrp")
 		sessionFile := filepath.Join(configDir, "session.json")
 
+		// 主循环：支持退出账户后重新登录
+		for {
+
 		// 步骤1: 尝试自动登录
 		fmt.Println("========== HayFrp 隧道启动器 ==========")
 
 		csrf := ""
 		userClient := api.NewUserAPIClient()
 
-		// 尝试读取保存的会话
-		if session := loadSession(sessionFile); session != nil {
-			fmt.Printf("检测到保存的登录信息 (用户: %s)\n", session.Username)
-			fmt.Print("正在验证 Token 有效性... ")
-
-			// 验证 token 是否有效
-			verifyResp, err := userClient.VerifyCsrf(session.CSRF)
-			if err == nil && verifyResp.Status == 200 {
-				fmt.Println("有效!")
-				csrf = session.CSRF
-				fmt.Printf("✓ 自动登录成功！\n\n")
-			} else {
-				fmt.Println("已过期")
-				fmt.Println("请重新登录")
-			}
-		}
-
-		// 如果自动登录失败，手动登录
-		for csrf == "" {
-			fmt.Print("用户名/邮箱: ")
-			username, _ := reader.ReadString('\n')
-			username = strings.TrimSpace(username)
-
-			fmt.Print("密码: ")
-			password, _ := reader.ReadString('\n')
-			password = strings.TrimSpace(password)
-
-			loginResp, err := userClient.Login(username, password)
-			if err != nil {
-				fmt.Printf("✗ 登录失败: %v\n", err)
-				continue
-			}
-
-			if loginResp.Status != 200 {
-				fmt.Printf("✗ 登录失败: %s\n", loginResp.Message)
-				continue
-			}
-
-			csrf = loginResp.Token
-
-			// 保存会话
-			os.MkdirAll(configDir, 0755)
-			session := &SavedSession{
-				CSRF:      csrf,
-				Username:  username,
-				LoginTime: time.Now(),
-			}
-			if err := saveSession(sessionFile, session); err == nil {
-				fmt.Printf("✓ 登录成功！(已保存登录状态)\n\n")
-			} else {
-				fmt.Printf("✓ 登录成功！\n\n")
-			}
-		}
-
-		// 步骤2: 获取用户信息
-		infoResp, err := userClient.GetInfo(csrf)
-		if err != nil {
-			fmt.Printf("✗ 获取用户信息失败: %v\n", err)
-			return
-		}
-		if !infoResp.Status {
-			fmt.Printf("✗ %s\n", infoResp.Message)
-			return
-		}
-		fmt.Printf("========== 用户信息 ==========\n")
-		fmt.Printf("用户: %s\n", infoResp.Username)
-		fmt.Printf("剩余流量: %v MB\n", infoResp.Traffic)
-		fmt.Printf("拥有隧道: %v / 已使用: %v\n", infoResp.Proxies, infoResp.Useproxies)
-		fmt.Printf("================================\n\n")
-
-		// 隧道选择循环
-		proxyClient := api.NewProxyAPIClient()
+		// 主循环：支持退出账户后重新登录
 		for {
-			// 步骤3: 获取隧道列表
-			listResp, err := proxyClient.ListTunnel(csrf, "")
+			// 如果未登录，尝试登录
+			if csrf == "" {
+				// 尝试读取保存的会话
+				if session := loadSession(sessionFile); session != nil {
+					fmt.Printf("检测到保存的登录信息 (用户: %s)\n", session.Username)
+					fmt.Print("正在验证 Token 有效性... ")
+
+					// 验证 token 是否有效
+					verifyResp, err := userClient.VerifyCsrf(session.CSRF)
+					if err == nil && verifyResp.Status == 200 {
+						fmt.Println("有效!")
+						csrf = session.CSRF
+						fmt.Printf("✓ 自动登录成功！\n\n")
+					} else {
+						fmt.Println("已过期")
+						fmt.Println("请重新登录")
+					}
+				}
+
+				// 如果自动登录失败，手动登录
+				for csrf == "" {
+					fmt.Print("用户名/邮箱: ")
+					username, _ := reader.ReadString('\n')
+					username = strings.TrimSpace(username)
+
+					fmt.Print("密码: ")
+					password, _ := reader.ReadString('\n')
+					password = strings.TrimSpace(password)
+
+					loginResp, err := userClient.Login(username, password)
+					if err != nil {
+						fmt.Printf("✗ 登录失败: %v\n", err)
+						continue
+					}
+
+					if loginResp.Status != 200 {
+						fmt.Printf("✗ 登录失败: %s\n", loginResp.Message)
+						continue
+					}
+
+					csrf = loginResp.Token
+
+					// 保存会话
+					os.MkdirAll(configDir, 0755)
+					session := &SavedSession{
+						CSRF:      csrf,
+						Username:  username,
+						LoginTime: time.Now(),
+					}
+					if err := saveSession(sessionFile, session); err == nil {
+						fmt.Printf("✓ 登录成功！(已保存登录状态)\n\n")
+					} else {
+						fmt.Printf("✓ 登录成功！\n\n")
+					}
+				}
+			}
+
+			// 步骤2: 获取用户信息
+			infoResp, err := userClient.GetInfo(csrf)
 			if err != nil {
-				fmt.Printf("✗ 获取隧道列表失败: %v\n", err)
-				fmt.Print("\n按任意键重试...")
-				reader.ReadString('\n')
+				fmt.Printf("✗ 获取用户信息失败: %v\n", err)
+				// 返回登录流程
+				csrf = ""
 				continue
 			}
-
-			if listResp.Status != 200 || len(listResp.Proxies) == 0 {
-				fmt.Println("✗ 暂无可用隧道，请先在控制台创建隧道")
-				fmt.Print("\n按任意键重试...")
-				reader.ReadString('\n')
+			if !infoResp.Status {
+				fmt.Printf("✗ %s\n", infoResp.Message)
+				// 返回登录流程
+				csrf = ""
 				continue
 			}
+			fmt.Printf("========== 用户信息 ==========\n")
+			fmt.Printf("用户: %s\n", infoResp.Username)
+			fmt.Printf("剩余流量: %v MB\n", infoResp.Traffic)
+			fmt.Printf("拥有隧道: %v / 已使用: %v\n", infoResp.Proxies, infoResp.Useproxies)
+			fmt.Printf("================================\n")
+			fmt.Printf("[0] 退出账户\n\n")
 
-			fmt.Println("========== 可用隧道列表 ==========")
-			for i, p := range listResp.Proxies {
-				status := "禁用"
-				if p.Status == "true" {
-					status = "启用"
-				}
-				fmt.Printf("%d. [%s] %s (%s)\n", i+1, p.ProxyType, p.ProxyName, status)
-				fmt.Printf("   节点: %s\n", p.NodeName)
-				fmt.Printf("   本地: %s:%s -> 远程: %s\n", p.LocalIP, p.LocalPort, p.RemotePort)
-				if p.Domain != "" {
-					fmt.Printf("   域名: %s\n", p.Domain)
-				}
-			}
-			fmt.Println("================================")
-
-			// 步骤4: 选择隧道
-			fmt.Print("\n请选择要启动的隧道编号: ")
-			choice, _ := reader.ReadString('\n')
-			choice = strings.TrimSpace(choice)
-
-			var choiceIndex int
-			_, err = fmt.Sscanf(choice, "%d", &choiceIndex)
-			if err != nil || choiceIndex < 1 || choiceIndex > len(listResp.Proxies) {
-				fmt.Println("✗ 无效的选择")
-				fmt.Print("\n按任意键重试...")
-				reader.ReadString('\n')
-				continue
-			}
-
-			selectedProxy := listResp.Proxies[choiceIndex-1]
-
-			// 检查隧道状态
-			if selectedProxy.Status != "true" {
-				fmt.Printf("隧道 %s 当前状态为禁用，正在启用...\n", selectedProxy.ProxyName)
-				toggleResp, err := proxyClient.ToggleTunnel(csrf, selectedProxy.ID, "true")
-				if err != nil {
-					fmt.Printf("✗ 启用隧道失败: %v\n", err)
-					fmt.Print("\n按任意键重试...")
-					reader.ReadString('\n')
-					continue
-				}
-				if toggleResp.Status != 200 {
-					fmt.Printf("✗ 启用隧道失败: %s\n", toggleResp.Message)
-					fmt.Print("\n按任意键重试...")
-					reader.ReadString('\n')
-					continue
-				}
-				fmt.Printf("✓ 隧道已启用\n")
-			}
-
-			// 步骤5: 生成配置文件
-			fmt.Printf("\n正在为隧道 %s 生成配置文件...\n", selectedProxy.ProxyName)
-			config, err := proxyClient.GetTunnelConfig("toml", csrf, "", selectedProxy.ID)
-			if err != nil {
-				fmt.Printf("✗ 生成配置文件失败: %v\n", err)
-				fmt.Print("\n按任意键重试...")
-				reader.ReadString('\n')
-				continue
-			}
-
-			// 保存配置文件到用户目录
-			if homeDir == "" {
-				homeDir = "."
-			}
-
-			configDir = filepath.Join(homeDir, ".hayfrp")
-			if err := os.MkdirAll(configDir, 0755); err != nil {
-				configDir = "."
-			}
-
-			configFile := filepath.Join(configDir, "frpc.toml")
-			if err := os.WriteFile(configFile, []byte(config), 0644); err != nil {
-				fmt.Printf("✗ 保存配置文件失败: %v\n", err)
-				fmt.Print("\n按任意键重试...")
-				reader.ReadString('\n')
-				continue
-			}
-
-			fmt.Printf("✓ 配置文件已保存: %s\n", configFile)
-
-			// 步骤6: 启动frpc
-			fmt.Printf("\n========== 启动frpc ==========\n")
-
-			// 检查frpc可执行文件
-			frpcPath := ""
-			frpcName := "frpc"
-			if runtime.GOOS == "windows" {
-				frpcName = "frpc.exe"
-			}
-
-			possiblePaths := []string{
-				filepath.Join(".", frpcName),
-				filepath.Join(homeDir, ".hayfrp", frpcName),
-			}
-
-			// Unix 系统额外路径
-			if runtime.GOOS != "windows" {
-				possiblePaths = append(possiblePaths,
-					"/usr/local/bin/frpc",
-					"/usr/bin/frpc",
-				)
-			}
-
-			for _, path := range possiblePaths {
-				if _, err := os.Stat(path); err == nil {
-					frpcPath = path
+			// 隧道选择循环
+			proxyClient := api.NewProxyAPIClient()
+			for {
+				// 检查是否已登录
+				if csrf == "" {
 					break
 				}
-			}
-
-			if frpcPath == "" {
-				fmt.Println("未找到 frpc 可执行文件，正在尝试自动下载...")
-
-				// 自动下载 frpc
-				downloadResp, err := downloadFrpc(homeDir, configDir)
+				// 步骤3: 获取隧道列表
+				listResp, err := proxyClient.ListTunnel(csrf, "")
 				if err != nil {
-					fmt.Printf("✗ 自动下载 frpc 失败: %v\n", err)
-					fmt.Println("\n请手动下载 frpc:")
+					fmt.Printf("✗ 获取隧道列表失败: %v\n", err)
+					fmt.Print("\n按任意键重试...")
+					reader.ReadString('\n')
+					continue
+				}
 
-					// 获取下载列表
-					nodeClient := api.NewNodeAPIClient()
-					downloadList, err := nodeClient.GetDownloadList()
-					if err == nil && downloadList.Status == 200 {
-						fmt.Println("\n下载源:")
-						for _, source := range downloadList.Sources {
-							fmt.Printf("  - %s: %s\n", source.Name, source.URL)
-						}
+				if listResp.Status != 200 || len(listResp.Proxies) == 0 {
+					fmt.Println("✗ 暂无可用隧道，请先在控制台创建隧道")
+					fmt.Print("\n按任意键重试...")
+					reader.ReadString('\n')
+					continue
+				}
 
-						fmt.Println("\n推荐下载:")
-						osName := runtime.GOOS
-						arch := runtime.GOARCH
+				fmt.Println("========== 可用隧道列表 ==========")
+				for i, p := range listResp.Proxies {
+					status := "禁用"
+					if p.Status == "true" {
+						status = "启用"
+					}
+					fmt.Printf("%d. [%s] %s (%s)\n", i+1, p.ProxyType, p.ProxyName, status)
+					fmt.Printf("   节点: %s\n", p.NodeName)
+					fmt.Printf("   本地: %s:%s -> 远程: %s\n", p.LocalIP, p.LocalPort, p.RemotePort)
+					if p.Domain != "" {
+						fmt.Printf("   域名: %s\n", p.Domain)
+					}
+				}
+				fmt.Println("================================")
 
-						fmt.Printf("  系统: %s, 架构: %s\n", osName, arch)
-						for _, item := range downloadList.Lists.Frpc {
-							if strings.ToLower(item.Platform) == strings.ToLower(osName) &&
-								strings.Contains(strings.ToLower(item.Arch), strings.ToLower(arch)) {
-								fmt.Printf("  - %s (版本: %s)\n", item.Name, item.Version)
-								for _, source := range downloadList.Sources {
-									fmt.Printf("    下载: %s%s\n", source.URL, item.URL)
+				// 步骤4: 选择隧道
+				fmt.Print("\n请选择要启动的隧道编号 [0退出]: ")
+				choice, _ := reader.ReadString('\n')
+				choice = strings.TrimSpace(choice)
+
+				// 检查是否选择退出
+				if choice == "0" {
+					// 退出账户
+					fmt.Print("\n确认退出账户? (y/n): ")
+					confirm, _ := reader.ReadString('\n')
+					confirm = strings.TrimSpace(confirm)
+					if strings.ToLower(confirm) == "y" {
+						// 删除会话文件
+						os.Remove(sessionFile)
+						fmt.Println("✓ 已退出账户")
+						// 返回到登录流程
+						csrf = ""
+						break
+					} else {
+						// 用户取消退出，继续显示隧道列表
+						continue
+					}
+				}
+
+				var choiceIndex int
+				_, err = fmt.Sscanf(choice, "%d", &choiceIndex)
+				if err != nil || choiceIndex < 1 || choiceIndex > len(listResp.Proxies) {
+					fmt.Println("✗ 无效的选择")
+					fmt.Print("\n按任意键重试...")
+					reader.ReadString('\n')
+					continue
+				}
+
+				selectedProxy := listResp.Proxies[choiceIndex-1]
+
+				// 检查隧道状态
+				if selectedProxy.Status != "true" {
+					fmt.Printf("隧道 %s 当前状态为禁用，正在启用...\n", selectedProxy.ProxyName)
+					toggleResp, err := proxyClient.ToggleTunnel(csrf, selectedProxy.ID, "true")
+					if err != nil {
+						fmt.Printf("✗ 启用隧道失败: %v\n", err)
+						fmt.Print("\n按任意键重试...")
+						reader.ReadString('\n')
+						continue
+					}
+					if toggleResp.Status != 200 {
+						fmt.Printf("✗ 启用隧道失败: %s\n", toggleResp.Message)
+						fmt.Print("\n按任意键重试...")
+						reader.ReadString('\n')
+						continue
+					}
+					fmt.Printf("✓ 隧道已启用\n")
+				}
+
+				// 步骤5: 生成配置文件
+				fmt.Printf("\n正在为隧道 %s 生成配置文件...\n", selectedProxy.ProxyName)
+				config, err := proxyClient.GetTunnelConfig("toml", csrf, "", selectedProxy.ID)
+				if err != nil {
+					fmt.Printf("✗ 生成配置文件失败: %v\n", err)
+					fmt.Print("\n按任意键重试...")
+					reader.ReadString('\n')
+					continue
+				}
+
+				// 保存配置文件到用户目录
+				if homeDir == "" {
+					homeDir = "."
+				}
+
+				configDir = filepath.Join(homeDir, ".hayfrp")
+				if err := os.MkdirAll(configDir, 0755); err != nil {
+					configDir = "."
+				}
+
+				configFile := filepath.Join(configDir, "frpc.toml")
+				if err := os.WriteFile(configFile, []byte(config), 0644); err != nil {
+					fmt.Printf("✗ 保存配置文件失败: %v\n", err)
+					fmt.Print("\n按任意键重试...")
+					reader.ReadString('\n')
+					continue
+				}
+
+				fmt.Printf("✓ 配置文件已保存: %s\n", configFile)
+
+				// 步骤6: 启动frpc
+				fmt.Printf("\n========== 启动frpc ==========\n")
+
+				// 检查frpc可执行文件
+				frpcPath := ""
+				frpcName := "frpc"
+				if runtime.GOOS == "windows" {
+					frpcName = "frpc.exe"
+				}
+
+				possiblePaths := []string{
+					filepath.Join(".", frpcName),
+					filepath.Join(homeDir, ".hayfrp", frpcName),
+				}
+
+				// Unix 系统额外路径
+				if runtime.GOOS != "windows" {
+					possiblePaths = append(possiblePaths,
+						"/usr/local/bin/frpc",
+						"/usr/bin/frpc",
+					)
+				}
+
+				for _, path := range possiblePaths {
+					if _, err := os.Stat(path); err == nil {
+						frpcPath = path
+						break
+					}
+				}
+
+				if frpcPath == "" {
+					fmt.Println("未找到 frpc 可执行文件，正在尝试自动下载...")
+
+					// 自动下载 frpc
+					downloadResp, err := downloadFrpc(homeDir, configDir)
+					if err != nil {
+						fmt.Printf("✗ 自动下载 frpc 失败: %v\n", err)
+						fmt.Println("\n请手动下载 frpc:")
+
+						// 获取下载列表
+						nodeClient := api.NewNodeAPIClient()
+						downloadList, err := nodeClient.GetDownloadList()
+						if err == nil && downloadList.Status == 200 {
+							fmt.Println("\n下载源:")
+							for _, source := range downloadList.Sources {
+								fmt.Printf("  - %s: %s\n", source.Name, source.URL)
+							}
+
+							fmt.Println("\n推荐下载:")
+							osName := runtime.GOOS
+							arch := runtime.GOARCH
+
+							fmt.Printf("  系统: %s, 架构: %s\n", osName, arch)
+							for _, item := range downloadList.Lists.Frpc {
+								if strings.ToLower(item.Platform) == strings.ToLower(osName) &&
+									strings.Contains(strings.ToLower(item.Arch), strings.ToLower(arch)) {
+									fmt.Printf("  - %s (版本: %s)\n", item.Name, item.Version)
+									for _, source := range downloadList.Sources {
+										fmt.Printf("    下载: %s%s\n", source.URL, item.URL)
+									}
 								}
 							}
 						}
+
+						fmt.Printf("\n下载后请将 frpc 放到以下任一路径:\n")
+						for _, path := range possiblePaths {
+							fmt.Printf("  - %s\n", path)
+						}
+						fmt.Print("\n按任意键重试...")
+						reader.ReadString('\n')
+						continue
 					}
 
-					fmt.Printf("\n下载后请将 frpc 放到以下任一路径:\n")
-					for _, path := range possiblePaths {
-						fmt.Printf("  - %s\n", path)
-					}
-					fmt.Print("\n按任意键重试...")
-					reader.ReadString('\n')
-					continue
+					frpcPath = downloadResp
+					fmt.Printf("✓ frpc 下载成功: %s\n", frpcPath)
 				}
 
-				frpcPath = downloadResp
-				fmt.Printf("✓ frpc 下载成功: %s\n", frpcPath)
+				fmt.Printf("使用 frpc: %s\n", frpcPath)
+				fmt.Printf("配置文件: %s\n", configFile)
+				fmt.Println("\n按 Ctrl+C 可停止隧道")
+				fmt.Println("================================\n")
+
+				// 启动frpc
+				frpcExec := exec.Command(frpcPath, "-c", configFile)
+				frpcExec.Stdout = os.Stdout
+				frpcExec.Stderr = os.Stderr
+
+				if err := frpcExec.Run(); err != nil {
+					fmt.Printf("\n✗ frpc 启动失败: %v\n", err)
+					fmt.Print("\n按任意键返回隧道列表...")
+					reader.ReadString('\n')
+				}
 			}
-
-			fmt.Printf("使用 frpc: %s\n", frpcPath)
-			fmt.Printf("配置文件: %s\n", configFile)
-			fmt.Println("\n按 Ctrl+C 可停止隧道")
-			fmt.Println("================================\n")
-
-			// 启动frpc
-			frpcExec := exec.Command(frpcPath, "-c", configFile)
-			frpcExec.Stdout = os.Stdout
-			frpcExec.Stderr = os.Stderr
-
-			if err := frpcExec.Run(); err != nil {
-				fmt.Printf("\n✗ frpc 启动失败: %v\n", err)
-				fmt.Print("\n按任意键返回隧道列表...")
-				reader.ReadString('\n')
-			}
+		}
 		}
 	},
 }
@@ -542,7 +580,6 @@ func getFileExt(url string) string {
 
 func init() {
 	rootCmd.AddCommand(startCmd)
-	rootCmd.AddCommand(logoutCmd)
 }
 
 // logoutCmd 退出登录命令
