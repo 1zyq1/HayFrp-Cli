@@ -11,8 +11,8 @@ HayFrp CLI 是一个命令行工具，用于管理 HayFrp 内网穿透服务。
 - **自动下载**：自动下载对应平台的 frpc 并启动
 - **API 容灾**：多端点自动故障转移
 
-
 ## 相关链接
 
+[📥 前往 Releases 页面下载](https://github.com/1zyq1/HayFrp-Cli/releases)
 - [HayFrp 官网](https://console.hayfrp.com)
 - [API 文档](./api-doc.md)
