@@ -13,6 +13,6 @@ HayFrp CLI 是一个命令行工具，用于管理 HayFrp 内网穿透服务。
 
 ## 相关链接
 
-[📥 前往 Releases 页面下载](https://github.com/1zyq1/HayFrp-Cli/releases)
+- [📥 前往 Releases 页面下载](https://github.com/1zyq1/HayFrp-Cli/releases)
 - [HayFrp 官网](https://console.hayfrp.com)
 - [API 文档](./api-doc.md)
