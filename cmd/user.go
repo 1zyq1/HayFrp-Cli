@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
 	"syscall"
 
 	"hayfrp-cli/api"
@@ -90,7 +91,17 @@ var userInfoCmd = &cobra.Command{
 			fmt.Printf("用户ID: %v\n", resp.ID)
 			fmt.Printf("用户名: %s\n", resp.Username)
 			fmt.Printf("邮箱: %s\n", resp.Email)
-			fmt.Printf("剩余流量: %v MB\n", resp.Traffic)
+			// 转换流量为GB
+			var trafficGB float64
+			switch v := resp.Traffic.(type) {
+			case string:
+				if val, err := strconv.ParseFloat(v, 64); err == nil {
+					trafficGB = val / 1024
+				}
+			case float64:
+				trafficGB = v / 1024
+			}
+			fmt.Printf("剩余流量: %.2f GB\n", trafficGB)
 			fmt.Printf("今日使用流量: %v Bytes\n", resp.Todaytraffic)
 			fmt.Printf("拥有隧道数: %v\n", resp.Proxies)
 			fmt.Printf("已使用隧道: %v\n", resp.Useproxies)

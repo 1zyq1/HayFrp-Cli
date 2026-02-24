@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,7 +125,17 @@ var startCmd = &cobra.Command{
 			}
 			fmt.Printf("========== 用户信息 ==========\n")
 			fmt.Printf("用户: %s\n", infoResp.Username)
-			fmt.Printf("剩余流量: %v MB\n", infoResp.Traffic)
+			// 转换流量为GB
+			var trafficGB float64
+			switch v := infoResp.Traffic.(type) {
+			case string:
+				if val, err := strconv.ParseFloat(v, 64); err == nil {
+					trafficGB = val / 1024
+				}
+			case float64:
+				trafficGB = v / 1024
+			}
+			fmt.Printf("剩余流量: %.2f GB\n", trafficGB)
 			fmt.Printf("拥有隧道: %v / 已使用: %v\n", infoResp.Proxies, infoResp.Useproxies)
 			fmt.Printf("================================\n")
 			fmt.Printf("[0] 退出账户\n\n")
